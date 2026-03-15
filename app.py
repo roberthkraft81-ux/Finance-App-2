@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import warnings
+import requests # <-- We added this to create our disguise
 
 warnings.filterwarnings('ignore')
 
@@ -25,12 +26,21 @@ assets = {
 selected_name = st.selectbox("Select an Index or Sector:", list(assets.keys()))
 ticker = assets[selected_name]
 
-# 2. Fetch and Calculate Data
-@st.cache_data(ttl=3600) # Caches data for 1 hour so the app loads instantly on your phone
+# 2. Fetch and Calculate Data (With the Disguise)
+@st.cache_data(ttl=3600)
 def get_data(t):
-    data = yf.Ticker(t).history(period="2y")
+    # --- THE FIX: Creating a custom session to bypass the block ---
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    })
+    
+    # Pass the session into yfinance so it looks like a normal web browser
+    data = yf.Ticker(t, session=session).history(period="2y")
+    # --------------------------------------------------------------
+
     if data.empty:
-        return None, None, None, None
+        return None, None, None
         
     delta = data['Close'].diff()
     gain = delta.clip(lower=0).rolling(window=14).mean()
@@ -48,7 +58,11 @@ def get_data(t):
     return data, smart_smoothed, dumb_smoothed
 
 with st.spinner(f"Loading data for {selected_name}..."):
-    data, smart_smoothed, dumb_smoothed = get_data(ticker)
+    try:
+        data, smart_smoothed, dumb_smoothed = get_data(ticker)
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
+        data = None
 
 # 3. Build the Chart
 if data is not None:
@@ -73,14 +87,13 @@ if data is not None:
     fig.update_layout(
         hovermode='x unified',
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=0, r=0, t=30, b=0) # Tighter margins for mobile screens
+        margin=dict(l=0, r=0, t=30, b=0)
     )
 
     fig.update_yaxes(title_text="Confidence", range=[0, 100], secondary_y=False)
     fig.add_hline(y=50, line_dash="dash", line_color="black", secondary_y=False)
     fig.update_yaxes(showgrid=False, secondary_y=True)
 
-    # Display it in the app
     st.plotly_chart(fig, use_container_width=True)
-else:
-    st.error("Failed to load data. Yahoo Finance might be down.")
+elif data is None:
+    st.warning("Awaiting data connection...")
